@@ -25,6 +25,31 @@ python -m flask run
 
 ## 拡張アイデア
 - 外部天気API連携で自動気温取得
+	- 外部天気API連携で自動気温取得（OpenWeatherMap を利用）
+
+## OpenWeatherMap を使った天気機能
+このリポジトリは OpenWeatherMap の現在の天気を取得する機能を追加しています。事前に API キーが必要です。
+
+1. 環境変数 `OPENWEATHER_API_KEY` に API キーを設定してください。
+	 - PowerShell の例:
+```powershell
+$env:OPENWEATHER_API_KEY = 'あなたのAPIキー'
+``` 
+2. サーバーを起動して、トップページの「天気取得」フォームに都市名を入力してください（例: Tokyo, Osaka）。
+
+### config.json に直接キーを置く方法（環境変数を使いたくない場合）
+プロジェクトルートに `config.json` を作成し、次の形式で API キーを記述するとアプリはそれを優先して読み込みます（リポジトリにコミットすると危険なので注意してください）。
+
+```json
+{
+	"OPENWEATHER_API_KEY": "あなたのAPIキー"
+}
+```
+
+この方法を使う場合は `config.json` を `.gitignore` に追加することを推奨します。
+
+API の呼び出しエンドポイントは `/api/weather` です。GET では `?city=Tokyo`、POST では JSON `{ "city": "Tokyo" }` で利用できます。
+
 - 通知（メール・プッシュ）
 - ユーザー認証・マルチユーザー
 
