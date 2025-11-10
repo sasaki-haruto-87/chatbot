@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>チャットボット秘書 - ミニ版</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>チャットボット秘書（ミニ版）</h1>
+    <div id="chat" class="chat"></div>
+    <div class="controls">
+      <input id="input" placeholder="メッセージを入力（例: 予定 / 忘れ物 / 服装 22）" />
+      <button id="send">送信</button>
+    </div>
+
+    <hr />
+    <h2>スケジュール作成（簡易フォーム）</h2>
+    <form id="scheduleForm">
+      <input id="sch_title" placeholder="タイトル" />
+      <input id="sch_datetime" placeholder="日時（例: 2025-10-30 14:00）" />
+      <input id="sch_items" placeholder="持ち物（カンマ区切り）" />
+      <button type="submit">スケジュール作成</button>
+    </form>
+
+    <h2>食事記録（簡易フォーム）</h2>
+    <form id="mealForm">
+      <input id="meal_type" placeholder="朝/昼/夕" />
+      <input id="meal_items" placeholder="メニュー" />
+      <input id="meal_cal" placeholder="カロリー（任意）" />
+      <button type="submit">記録</button>
+    </form>
+  </div>
+  <script src="/static/main.js"></script>
+</body>
+</html>
