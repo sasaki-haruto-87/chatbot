@@ -9,6 +9,17 @@
 <body>
   <div class="container">
     <h1>チャットボット秘書（ミニ版）</h1>
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div id="timeArea" style="font-size:0.9em;color:#444;">
+        現在時刻: <span id="currentTime">読み込み中...</span>
+        <button id="refreshTime" style="margin-left:8px;">更新</button>
+      </div>
+      <div style="text-align:right;">
+        <button id="saveProfileTop">プロファイル保存</button>
+        <button id="loadProfileTop">プロファイル読み込み</button>
+        <input id="loadProfileFileTop" type="file" accept="application/json" style="display:none" />
+      </div>
+    </div>
     <div id="chat" class="chat"></div>
     <div class="controls">
       <input id="input" placeholder="メッセージを入力（例: 予定 / 忘れ物 / 服装 22）" />
@@ -31,6 +42,16 @@
       <input id="meal_cal" placeholder="カロリー（任意）" />
       <button type="submit">記録</button>
     </form>
+
+    <hr />
+    <h2>天気取得</h2>
+    <div id="weatherArea">
+      <input id="weather_city" placeholder="都市名を入力（例: Tokyo, Osaka）" />
+      <button id="getWeather">天気を取得</button>
+      <div id="weatherResult" style="margin-top:8px;"></div>
+    </div>
+    
+    <!-- プロファイルはダウンロード/アップロードで管理します。属性はチャットで設定してください。 -->
   </div>
   <script src="/static/main.js"></script>
 </body>
