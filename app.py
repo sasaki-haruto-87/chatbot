@@ -71,6 +71,28 @@ class Meal(db.Model):
             'notes': self.notes
         }
 
+
+# Action log for undo support
+class ActionLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    mode = db.Column(db.Integer, nullable=False)
+    action_type = db.Column(db.Integer, nullable=False)  # 1:add,2:modify,3:delete
+    payload = db.Column(db.Text, nullable=True)  # JSON of what was sent
+    inverse = db.Column(db.Text, nullable=True)  # JSON describing how to undo
+    created_at = db.Column(db.DateTime, nullable=False, server_default=func.now())
+    undone = db.Column(db.Boolean, nullable=False, default=False)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'mode': self.mode,
+            'action_type': self.action_type,
+            'payload': json.loads(self.payload) if self.payload else None,
+            'inverse': json.loads(self.inverse) if self.inverse else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'undone': self.undone
+        }
+
 # --- Helpers ---
 def init_db():
     try:
@@ -248,6 +270,135 @@ def get_ntp_time(server: str = None, timeout: float = 3.0):
         return {'utc': utc_dt.isoformat(), 'local': local_dt.isoformat(), 'timestamp': seconds}
     except Exception as e:
         raise RuntimeError(f'NTP レスポンス解析エラー: {e}')
+
+
+# --- Action logging helpers ---
+def _record_action(mode:int, action_type:int, payload_obj, inverse_obj):
+    try:
+        al = ActionLog(
+            mode=int(mode),
+            action_type=int(action_type),
+            payload=json.dumps(payload_obj, ensure_ascii=False) if payload_obj is not None else None,
+            inverse=json.dumps(inverse_obj, ensure_ascii=False) if inverse_obj is not None else None
+        )
+        db.session.add(al)
+        db.session.commit()
+        return al.to_dict()
+    except Exception as e:
+        print(f"ActionLog error: {e}")
+        db.session.rollback()
+        return None
+
+
+def _apply_inverse(inverse_obj):
+    """
+    inverse_obj should be a dict with keys: op ('add'|'update'|'delete'), mode, data
+    """
+    if not inverse_obj or not isinstance(inverse_obj, dict):
+        raise RuntimeError('invalid inverse object')
+
+    op = inverse_obj.get('op')
+    mode = inverse_obj.get('mode')
+    data = inverse_obj.get('data')
+
+    # Profile operations (mode==1)
+    if mode == 1:
+        if op == 'add':
+            # data is profile dict
+            save_profile(data)
+            return {'ok': True, 'info': 'profile restored'}
+        if op == 'delete':
+            name = data.get('nickname') or data.get('name')
+            path = _profile_path(name)
+            if os.path.exists(path):
+                os.remove(path)
+            return {'ok': True, 'info': 'profile deleted'}
+        if op == 'update':
+            # data contains full previous profile to restore
+            save_profile(data)
+            return {'ok': True, 'info': 'profile restored'}
+
+    # Schedule operations (mode==2)
+    if mode == 2:
+        if op == 'delete':
+            # delete schedule by id
+            sid = data.get('id')
+            s = Schedule.query.get(sid)
+            if s:
+                db.session.delete(s)
+                db.session.commit()
+            return {'ok': True, 'info': 'schedule deleted'}
+        if op == 'add':
+            # recreate schedule from full data
+            s = Schedule(
+                id=data.get('id') or str(uuid.uuid4()),
+                title=data.get('title',''),
+                datetime=data.get('datetime',''),
+                location=data.get('location'),
+                items_json=json.dumps(data.get('items',[]), ensure_ascii=False),
+                status=data.get('status','active'),
+                alarm=datetime.fromisoformat(data['alarm']) if data.get('alarm') else None
+            )
+            db.session.add(s)
+            db.session.commit()
+            return {'ok': True, 'info': 'schedule restored', 'schedule': s.to_dict()}
+        if op == 'update':
+            # data contains previous full record
+            sid = data.get('id')
+            s = Schedule.query.get(sid)
+            if not s:
+                # recreate
+                return _apply_inverse({'op':'add','mode':2,'data':data})
+            s.title = data.get('title')
+            s.datetime = data.get('datetime')
+            s.location = data.get('location')
+            s.items_json = json.dumps(data.get('items',[]), ensure_ascii=False)
+            s.status = data.get('status','active')
+            try:
+                s.alarm = datetime.fromisoformat(data['alarm']) if data.get('alarm') else None
+            except Exception:
+                s.alarm = None
+            db.session.commit()
+            return {'ok': True, 'info': 'schedule restored'}
+
+    # Meal operations (mode==5)
+    if mode == 5:
+        if op == 'delete':
+            mid = data.get('id')
+            m = Meal.query.get(mid)
+            if m:
+                db.session.delete(m)
+                db.session.commit()
+            return {'ok': True, 'info': 'meal deleted'}
+        if op == 'add':
+            mm = Meal(
+                id=data.get('id') or str(uuid.uuid4()),
+                date=data.get('date') or datetime.now().strftime('%Y-%m-%d %H:%M'),
+                meal_type=data.get('meal_type','不明'),
+                items=data.get('items',''),
+                calories=data.get('calories'),
+                photos=json.dumps(data.get('photos')) if data.get('photos') else None,
+                rating=data.get('rating'),
+                notes=data.get('notes')
+            )
+            db.session.add(mm)
+            db.session.commit()
+            return {'ok': True, 'info': 'meal restored', 'meal': mm.to_dict()}
+        if op == 'update':
+            mid = data.get('id')
+            m = Meal.query.get(mid)
+            if not m:
+                return _apply_inverse({'op':'add','mode':5,'data':data})
+            m.meal_type = data.get('meal_type','不明')
+            m.items = data.get('items','')
+            m.calories = data.get('calories')
+            m.photos = json.dumps(data.get('photos')) if data.get('photos') else None
+            m.rating = data.get('rating')
+            m.notes = data.get('notes')
+            db.session.commit()
+            return {'ok': True, 'info': 'meal restored'}
+
+    raise RuntimeError('unsupported inverse operation')
 
 
 # --- Routes ---
@@ -1087,6 +1238,241 @@ def weather_api():
         return jsonify({'error': 'city parameter is required (例: ?city=Tokyo または {"city":"Tokyo"} )'}), 400
     result = get_current_weather(city)
     return jsonify(result)
+
+
+@app.route('/api/assistant_call', methods=['POST'])
+def assistant_call():
+    """Generic function call entrypoint for external (Gemini) calls.
+    Expect JSON: {"mode": int, "type": int, "data": object|string|null}
+    mode: 1=profile, 2=schedule, 5=meal
+    type: 1=add,2=modify,3=delete,4=read
+    data: operation parameters (for add/modify/delete: full object; for delete: id string or {id:...}; for read: filter or null)
+    """
+    payload = request.get_json() or {}
+    try:
+        mode = int(payload.get('mode'))
+        typ = int(payload.get('type'))
+    except Exception:
+        return jsonify({'error': 'mode and type must be integers'}), 400
+
+    data = payload.get('data')
+
+    # PROFILE (mode==1)
+    if mode == 1:
+        # READ
+        if typ == 4:
+            if not data:
+                # return all profiles
+                return jsonify({'profiles': list_profiles()})
+            # data may be name
+            name = data if isinstance(data, str) else (data.get('name') or data.get('nickname'))
+            if not name:
+                return jsonify({'error': 'profile name required for read'}), 400
+            p = load_profile(name)
+            return jsonify({'profile': p})
+
+        # ADD
+        if typ == 1:
+            if not isinstance(data, dict):
+                return jsonify({'error': 'profile data (object) required for add'}), 400
+            # check existing
+            name = data.get('nickname') or data.get('name')
+            prev = load_profile(name) if name else None
+            save_profile(data)
+            inverse = {'op': 'delete', 'mode': 1, 'data': {'nickname': name, 'name': name}} if not prev else {'op':'update','mode':1,'data': prev}
+            _record_action(1,1,data,inverse)
+            return jsonify({'ok': True, 'profile': data})
+
+        # MODIFY
+        if typ == 2:
+            if not isinstance(data, dict):
+                return jsonify({'error': 'profile data (object) required for modify'}), 400
+            name = data.get('nickname') or data.get('name')
+            if not name:
+                return jsonify({'error': 'profile name required for modify'}), 400
+            prev = load_profile(name)
+            merged = prev.copy() if prev else {}
+            merged.update(data)
+            save_profile(merged)
+            inverse = {'op':'update','mode':1,'data': prev} if prev else {'op':'delete','mode':1,'data': {'nickname': name,'name':name}}
+            _record_action(1,2,data,inverse)
+            return jsonify({'ok': True, 'profile': merged})
+
+        # DELETE
+        if typ == 3:
+            # data is name or object with name
+            name = data if isinstance(data, str) else (data.get('name') or data.get('nickname'))
+            if not name:
+                return jsonify({'error': 'profile name required for delete'}), 400
+            prev = load_profile(name)
+            path = _profile_path(name)
+            if os.path.exists(path):
+                os.remove(path)
+            inverse = {'op':'add','mode':1,'data': prev} if prev else None
+            _record_action(1,3,{'name':name},inverse)
+            return jsonify({'ok': True})
+
+        return jsonify({'error': 'unsupported profile operation'}), 400
+
+    # SCHEDULE (mode==2)
+    if mode == 2:
+        # READ
+        if typ == 4:
+            # if data provided and contains id, return that schedule, else all
+            if data and isinstance(data, dict) and data.get('id'):
+                s = Schedule.query.get(data.get('id'))
+                return jsonify({'schedule': s.to_dict() if s else None})
+            schs = Schedule.query.order_by(Schedule.datetime).all()
+            return jsonify({'schedules': [s.to_dict() for s in schs]})
+
+        # ADD
+        if typ == 1:
+            if not isinstance(data, dict):
+                return jsonify({'error': 'schedule data required for add'}), 400
+            sid = str(uuid.uuid4())
+            s = Schedule(
+                id=sid,
+                title=data.get('title',''),
+                datetime=data.get('datetime',''),
+                location=data.get('location'),
+                items_json=json.dumps(data.get('items',[]), ensure_ascii=False),
+                status=data.get('status','active'),
+                alarm=datetime.fromisoformat(data['alarm']) if data.get('alarm') else None
+            )
+            db.session.add(s)
+            db.session.commit()
+            inverse = {'op':'delete','mode':2,'data': {'id': sid}}
+            _record_action(2,1,data, inverse)
+            return jsonify({'ok': True, 'schedule': s.to_dict()})
+
+        # MODIFY
+        if typ == 2:
+            if not isinstance(data, dict) or not data.get('id'):
+                return jsonify({'error': 'schedule id and data required for modify'}), 400
+            s = Schedule.query.get(data.get('id'))
+            if not s:
+                return jsonify({'error': 'schedule not found'}), 404
+            prev = s.to_dict()
+            # update allowed fields
+            for f in ('title','datetime','location','status'):
+                if f in data:
+                    setattr(s,f,data.get(f))
+            if 'items' in data:
+                s.items_json = json.dumps(data.get('items',[]), ensure_ascii=False)
+            if 'alarm' in data:
+                try:
+                    s.alarm = datetime.fromisoformat(data['alarm']) if data['alarm'] else None
+                except Exception:
+                    pass
+            db.session.commit()
+            inverse = {'op':'update','mode':2,'data': prev}
+            _record_action(2,2,data,inverse)
+            return jsonify({'ok': True, 'schedule': s.to_dict()})
+
+        # DELETE
+        if typ == 3:
+            sid = data if isinstance(data, str) else (data.get('id') if isinstance(data, dict) else None)
+            if not sid:
+                return jsonify({'error': 'schedule id required for delete'}), 400
+            s = Schedule.query.get(sid)
+            if not s:
+                return jsonify({'error': 'schedule not found'}), 404
+            prev = s.to_dict()
+            db.session.delete(s)
+            db.session.commit()
+            inverse = {'op':'add','mode':2,'data': prev}
+            _record_action(2,3,{'id':sid}, inverse)
+            return jsonify({'ok': True})
+
+        return jsonify({'error': 'unsupported schedule operation'}), 400
+
+    # MEAL (mode==5)
+    if mode == 5:
+        if typ == 4:
+            if data and isinstance(data, dict) and data.get('id'):
+                m = Meal.query.get(data.get('id'))
+                return jsonify({'meal': m.to_dict() if m else None})
+            ms = Meal.query.order_by(Meal.date.desc()).all()
+            return jsonify({'meals': [m.to_dict() for m in ms]})
+
+        if typ == 1:
+            if not isinstance(data, dict):
+                return jsonify({'error': 'meal data required for add'}), 400
+            mid = str(uuid.uuid4())
+            m = Meal(
+                id=mid,
+                date=data.get('date') or datetime.now().strftime('%Y-%m-%d %H:%M'),
+                meal_type=data.get('meal_type','不明'),
+                items=data.get('items',''),
+                calories=data.get('calories'),
+                photos=json.dumps(data.get('photos')) if data.get('photos') else None,
+                rating=data.get('rating'),
+                notes=data.get('notes')
+            )
+            db.session.add(m)
+            db.session.commit()
+            inverse = {'op':'delete','mode':5,'data': {'id': mid}}
+            _record_action(5,1,data,inverse)
+            return jsonify({'ok': True, 'meal': m.to_dict()})
+
+        if typ == 2:
+            if not isinstance(data, dict) or not data.get('id'):
+                return jsonify({'error': 'meal id and data required for modify'}), 400
+            m = Meal.query.get(data.get('id'))
+            if not m:
+                return jsonify({'error': 'meal not found'}), 404
+            prev = m.to_dict()
+            for f in ('meal_type','items','calories','rating','notes'):
+                if f in data:
+                    setattr(m,f,data.get(f))
+            if 'photos' in data:
+                m.photos = json.dumps(data.get('photos')) if data.get('photos') else None
+            db.session.commit()
+            inverse = {'op':'update','mode':5,'data': prev}
+            _record_action(5,2,data,inverse)
+            return jsonify({'ok': True, 'meal': m.to_dict()})
+
+        if typ == 3:
+            mid = data if isinstance(data, str) else (data.get('id') if isinstance(data, dict) else None)
+            if not mid:
+                return jsonify({'error': 'meal id required for delete'}), 400
+            m = Meal.query.get(mid)
+            if not m:
+                return jsonify({'error': 'meal not found'}), 404
+            prev = m.to_dict()
+            db.session.delete(m)
+            db.session.commit()
+            inverse = {'op':'add','mode':5,'data': prev}
+            _record_action(5,3,{'id':mid}, inverse)
+            return jsonify({'ok': True})
+
+        return jsonify({'error': 'unsupported meal operation'}), 400
+
+    return jsonify({'error': f'unsupported mode: {mode}'}), 400
+
+
+@app.route('/api/assistant_undo', methods=['POST'])
+def assistant_undo():
+    """Undo the last logged action. Accepts optional JSON {mode: int} to restrict undo to a mode."""
+    payload = request.get_json() or {}
+    mode = payload.get('mode')
+    try:
+        q = ActionLog.query.filter(ActionLog.undone == False)
+        if mode:
+            q = q.filter(ActionLog.mode == int(mode))
+        last = q.order_by(ActionLog.created_at.desc()).first()
+        if not last:
+            return jsonify({'error': 'no action to undo'}), 404
+        inv = json.loads(last.inverse) if last.inverse else None
+        if not inv:
+            return jsonify({'error': 'no inverse available for last action'}), 400
+        res = _apply_inverse(inv)
+        last.undone = True
+        db.session.commit()
+        return jsonify({'ok': True, 'result': res, 'action': last.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/time', methods=['GET'])
