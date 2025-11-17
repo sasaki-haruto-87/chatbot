@@ -313,6 +313,207 @@ def chat():
         # サーバーからプロファイルを返す（クライアントはこれを保存）
         return jsonify({'reply': f'プロファイル登録が完了しました: {tp.get("name")} / {tp.get("age")} / {tp.get("region")}', 'profile': tp})
 
+    # --- メニュー駆動の登録/変更/削除フロー ---
+    # トップメニュー開始
+    if message in ('登録', '変更', '削除'):
+        session['menu_action'] = message  # '登録' / '変更' / '削除'
+        menu = (
+            '何を{}しますか？番号で選んでください:\n'
+            '1. プロファイル\n'
+            '2. 予定\n'
+            '3. 忘れ物(予定の持ち物に追加)\n'
+            '4. 服装(メモ)\n'
+            '5. 食事記録\n'
+            '6. 地域'
+        ).format(message)
+        return jsonify({'reply': menu})
+
+    # メニュー選択の処理 (選択は数字か単語で受け付ける)
+    menu_action = session.get('menu_action')
+    if menu_action:
+        # ユーザーがキャンセルしたい場合
+        if message in ('キャンセル', 'やめる', '中止'):
+            session.pop('menu_action', None)
+            # 可能ならフロー中の一時データも消す
+            for k in ('temp_schedule', 'register_schedule_flow', 'temp_meal', 'register_meal_flow'):
+                session.pop(k, None)
+            return jsonify({'reply': '操作をキャンセルしました。'})
+
+        choice = None
+        m_num = re.match(r'^(\d)$', message.strip())
+        if m_num:
+            choice = int(m_num.group(1))
+        else:
+            # キーワードでも受け付け
+            mapping = {'プロファイル':1, '予定':2, '忘れ物':3, '服装':4, '食事':5, '地域':6}
+            for k,v in mapping.items():
+                if k in message:
+                    choice = v
+                    break
+
+        if not choice:
+            return jsonify({'reply': '番号で選択してください（例: 1）またはキャンセルと入力してください。'})
+
+        # 登録フローを開始
+        if menu_action == '登録':
+            if choice == 1:
+                # プロファイル登録 → 再利用: セッションベースのプロファイル登録を開始
+                session.pop('menu_action', None)
+                session['profile_flow'] = 'await_name'
+                session['temp_profile'] = {}
+                return jsonify({'reply': 'プロファイル登録を開始します。名前は？'})
+            elif choice == 2:
+                # スケジュール登録のQ&Aを開始
+                session.pop('menu_action', None)
+                session['register_schedule_flow'] = 'await_title'
+                session['temp_schedule'] = {}
+                return jsonify({'reply': 'スケジュール登録を開始します。タイトルは？'})
+            elif choice == 3:
+                session.pop('menu_action', None)
+                return jsonify({'reply': '忘れ物の登録は、予定の持ち物として追加します。対象の予定IDを入力するか「次の予定」と入力してください。'})
+            elif choice == 4:
+                session.pop('menu_action', None)
+                return jsonify({'reply': '服装メモは「服装 22」のように入力してください。保存はクライアント側で管理してください。'})
+            elif choice == 5:
+                # 食事登録のQ&Aを開始
+                session.pop('menu_action', None)
+                session['register_meal_flow'] = 'await_type'
+                session['temp_meal'] = {}
+                return jsonify({'reply': '食事記録登録を開始します。食事タイプは？（例: 朝/昼/夕）'})
+            elif choice == 6:
+                session.pop('menu_action', None)
+                session['profile_flow'] = 'await_region'
+                session['temp_profile'] = {}
+                return jsonify({'reply': '地域を入力してください。'})
+
+        # 変更フロー: 簡易実装 (プロフィールはクライアント管理のため案内のみ)
+        if menu_action == '変更':
+            session.pop('menu_action', None)
+            if choice == 1:
+                return jsonify({'reply': 'プロファイルの変更はクライアントで行ってください。画面のプロファイル編集機能を使ってください。'})
+            elif choice == 2:
+                return jsonify({'reply': '予定の変更は予定一覧から ID を確認し、API を使って更新してください（例: PUT /api/schedules）。またはチャットで「予定」を入力して該当予定を確認してください。'})
+            elif choice == 3:
+                return jsonify({'reply': '忘れ物の変更は該当予定の持ち物を編集してください（予定を編集 -> items を更新）。'})
+            elif choice == 4:
+                return jsonify({'reply': '服装メモの変更は現在サポートされていません。'})
+            elif choice == 5:
+                return jsonify({'reply': '食事記録の変更は該当の記録 ID を指定して PUT /api/meals を使用してください。'})
+            elif choice == 6:
+                return jsonify({'reply': '地域の変更は「地域登録 <地域名>」で行えます（例: 地域登録 Tokyo）。'})
+
+        # 削除フロー
+        if menu_action == '削除':
+            session.pop('menu_action', None)
+            if choice == 1:
+                return jsonify({'reply': 'プロファイルの削除はクライアント側で行ってください（ローカルストレージのプロファイルを削除）。'})
+            elif choice == 2:
+                return jsonify({'reply': '予定を削除するには「予定削除 <ID>」と入力してください。予定の ID は「予定」と入力して確認できます。'})
+            elif choice == 3:
+                return jsonify({'reply': '忘れ物は予定の持ち物を編集して削除してください。'})
+            elif choice == 4:
+                return jsonify({'reply': '服装メモの削除はサポートされていません。'})
+            elif choice == 5:
+                return jsonify({'reply': '食事記録を削除するには「食事削除 <ID>」と入力してください。記録の ID は「食事」と入力して確認できます。'})
+            elif choice == 6:
+                return jsonify({'reply': '地域情報の削除はクライアント側で行ってください。'})
+
+    # スケジュール登録 Q&A フロー
+    sch_flow = session.get('register_schedule_flow')
+    if sch_flow:
+        ts = session.get('temp_schedule', {})
+        if sch_flow == 'await_title':
+            ts['title'] = message.strip() or '無題'
+            session['temp_schedule'] = ts
+            session['register_schedule_flow'] = 'await_datetime'
+            return jsonify({'reply': '日時を入力してください（例: 2025-10-30 14:00）'})
+        if sch_flow == 'await_datetime':
+            try:
+                # 確認だけするためパースする
+                _ = datetime.fromisoformat(message.strip())
+                ts['datetime'] = message.strip()
+                session['temp_schedule'] = ts
+                session['register_schedule_flow'] = 'await_items'
+                return jsonify({'reply': '持ち物があればカンマ区切りで入力してください。なければ空で送ってください。'})
+            except Exception:
+                return jsonify({'reply': '日時の形式が不正です。例: 2025-10-30 14:00 のように入力してください。'})
+        if sch_flow == 'await_items':
+            items = [i.strip() for i in message.split(',') if i.strip()]
+            ts['items'] = items
+            session['temp_schedule'] = ts
+            session['register_schedule_flow'] = 'await_location'
+            return jsonify({'reply': '場所があれば入力してください。なければ空で送ってください。'})
+        if sch_flow == 'await_location':
+            ts['location'] = message.strip()
+            # 保存
+            schedule_id = str(uuid.uuid4())
+            s = Schedule(
+                id=schedule_id,
+                title=ts.get('title', '無題'),
+                datetime=ts.get('datetime'),
+                location=ts.get('location'),
+                items_json=json.dumps(ts.get('items', []), ensure_ascii=False),
+                status='active'
+            )
+            db.session.add(s)
+            db.session.commit()
+            # クリア
+            session.pop('register_schedule_flow', None)
+            session.pop('temp_schedule', None)
+            return jsonify({'reply': f'スケジュールを作成しました: {s.title} @ {s.datetime}', 'schedule': s.to_dict()})
+
+    # 食事登録 Q&A フロー
+    meal_flow = session.get('register_meal_flow')
+    if meal_flow:
+        tm = session.get('temp_meal', {})
+        if meal_flow == 'await_type':
+            tm['meal_type'] = message.strip() or '不明'
+            session['temp_meal'] = tm
+            session['register_meal_flow'] = 'await_items'
+            return jsonify({'reply': 'メニューを入力してください（カンマ区切り）。例: ご飯, 味噌汁'})
+        if meal_flow == 'await_items':
+            tm['items'] = message.strip()
+            session['temp_meal'] = tm
+            session['register_meal_flow'] = 'await_calories'
+            return jsonify({'reply': 'カロリーが分かれば数字で入力してください。分からなければ空で送ってください。'})
+        if meal_flow == 'await_calories':
+            m = re.search(r'(\d+)', message)
+            if m:
+                tm['calories'] = int(m.group(1))
+            else:
+                tm['calories'] = None
+            session['temp_meal'] = tm
+            session['register_meal_flow'] = 'await_rating'
+            return jsonify({'reply': '評価（1-5）を入力してください。なければ空で送ってください。'})
+        if meal_flow == 'await_rating':
+            m = re.search(r'([1-5])', message)
+            if m:
+                tm['rating'] = int(m.group(1))
+            else:
+                tm['rating'] = None
+            # 保存
+            meal_id = str(uuid.uuid4())
+            mm = Meal(
+                id=meal_id,
+                date=datetime.now().strftime('%Y-%m-%d %H:%M'),
+                meal_type=tm.get('meal_type', '不明'),
+                items=tm.get('items', ''),
+                calories=tm.get('calories'),
+                photos=None,
+                rating=tm.get('rating'),
+                notes=None
+            )
+            db.session.add(mm)
+            db.session.commit()
+            session.pop('register_meal_flow', None)
+            session.pop('temp_meal', None)
+            reply = f'食事を記録しました: {mm.meal_type} — {mm.items}'
+            if mm.calories:
+                reply += f' ({mm.calories} kcal)'
+            if mm.rating:
+                reply += f'\n評価: {"★" * mm.rating}{"☆" * (5-mm.rating)}'
+            return jsonify({'reply': reply, 'meal': mm.to_dict()})
+
     # チャットからプロファイル属性を設定・変更するパターンを検出して処理する
     # 例: "ニックネーム 太郎", "年齢 30", "地域 Tokyo"
     updated = False
