@@ -301,21 +301,22 @@ def _apply_inverse(inverse_obj):
     mode = inverse_obj.get('mode')
     data = inverse_obj.get('data')
 
-    # Profile operations (mode==1)
+    # Profile operations (mode==1) - セッションベース
     if mode == 1:
         if op == 'add':
-            # data is profile dict
-            save_profile(data)
+            # セッション内プロファイルを復元
+            from flask import session
+            session['profile'] = data
             return {'ok': True, 'info': 'profile restored'}
         if op == 'delete':
-            name = data.get('nickname') or data.get('name')
-            path = _profile_path(name)
-            if os.path.exists(path):
-                os.remove(path)
-            return {'ok': True, 'info': 'profile deleted'}
+            # セッション内プロファイルをクリア
+            from flask import session
+            session.pop('profile', None)
+            return {'ok': True, 'info': 'profile cleared'}
         if op == 'update':
-            # data contains full previous profile to restore
-            save_profile(data)
+            # セッション内プロファイルを復元
+            from flask import session
+            session['profile'] = data
             return {'ok': True, 'info': 'profile restored'}
 
     # Schedule operations (mode==2)
@@ -422,6 +423,10 @@ def chat():
         p = load_profile(profile_payload)
         if p:
             profile_obj = p
+
+    # クライアントから送られたプロファイルをセッションに登録
+    if profile_obj:
+        session['profile'] = profile_obj
 
     # 会話形式のプロファイル登録フロー（セッションで管理）
     flow = session.get('profile_flow')
@@ -1226,6 +1231,18 @@ def weather_api():
     else:
         payload = request.get_json() or {}
         city = payload.get('city')
+        
+        # クライアントから送られたプロファイルをセッションに登録
+        profile_payload = payload.get('profile')
+        if profile_payload:
+            if isinstance(profile_payload, dict):
+                session['profile'] = profile_payload
+            elif isinstance(profile_payload, str):
+                # 文字列の場合はサーバーに保存されたプロファイル名として読み込む
+                p = load_profile(profile_payload)
+                if p:
+                    session['profile'] = p
+    
     # フロントが profile を送ってきた場合はプロフィールの region を利用する
     if not city:
         payload = request.get_json() or {}
@@ -1249,6 +1266,18 @@ def assistant_call():
     data: operation parameters (for add/modify/delete: full object; for delete: id string or {id:...}; for read: filter or null)
     """
     payload = request.get_json() or {}
+    
+    # クライアントから送られたプロファイルをセッションに登録
+    profile_payload = payload.get('profile')
+    if profile_payload:
+        if isinstance(profile_payload, dict):
+            session['profile'] = profile_payload
+        elif isinstance(profile_payload, str):
+            # 文字列の場合はサーバーに保存されたプロファイル名として読み込む
+            p = load_profile(profile_payload)
+            if p:
+                session['profile'] = p
+    
     try:
         mode = int(payload.get('mode'))
         typ = int(payload.get('type'))
@@ -1262,54 +1291,60 @@ def assistant_call():
         # READ
         if typ == 4:
             if not data:
-                # return all profiles
-                return jsonify({'profiles': list_profiles()})
-            # data may be name
-            name = data if isinstance(data, str) else (data.get('name') or data.get('nickname'))
-            if not name:
-                return jsonify({'error': 'profile name required for read'}), 400
-            p = load_profile(name)
+                # セッション内プロファイルを取得
+                prof = session.get('profile')
+                # セッション内が空なら、外部ファイル（全プロファイル）から最初の1件を読み込む
+                if not prof:
+                    profiles = list_profiles()
+                    prof = profiles[0] if profiles else None
+                return jsonify({'profile': prof})
+            # data に nickname が指定されていれば外部ファイルから読み込む
+            nickname = data if isinstance(data, str) else data.get('nickname')
+            if not nickname:
+                # data が指定されていても nickname がない場合はセッション内を返す
+                prof = session.get('profile')
+                # セッション内が空なら、外部ファイルから最初の1件を読み込む
+                if not prof:
+                    profiles = list_profiles()
+                    prof = profiles[0] if profiles else None
+                return jsonify({'profile': prof})
+            # 外部ファイルから読み込む
+            p = load_profile(nickname)
             return jsonify({'profile': p})
 
-        # ADD
+        # ADD - セッション内プロファイルを全て置換
         if typ == 1:
             if not isinstance(data, dict):
                 return jsonify({'error': 'profile data (object) required for add'}), 400
-            # check existing
-            name = data.get('nickname') or data.get('name')
-            prev = load_profile(name) if name else None
-            save_profile(data)
-            inverse = {'op': 'delete', 'mode': 1, 'data': {'nickname': name, 'name': name}} if not prev else {'op':'update','mode':1,'data': prev}
-            _record_action(1,1,data,inverse)
+            # 前のセッション内プロファイルを保存（undo 用）
+            prev = session.get('profile', {})
+            # セッション内プロファイルを新しいデータで置換
+            session['profile'] = data
+            inverse = {'op': 'update', 'mode': 1, 'data': prev} if prev else {'op': 'delete', 'mode': 1, 'data': None}
+            _record_action(1, 1, data, inverse)
             return jsonify({'ok': True, 'profile': data})
 
-        # MODIFY
+        # MODIFY - セッション内プロファイルの個別要素を更新
         if typ == 2:
             if not isinstance(data, dict):
                 return jsonify({'error': 'profile data (object) required for modify'}), 400
-            name = data.get('nickname') or data.get('name')
-            if not name:
-                return jsonify({'error': 'profile name required for modify'}), 400
-            prev = load_profile(name)
-            merged = prev.copy() if prev else {}
-            merged.update(data)
-            save_profile(merged)
-            inverse = {'op':'update','mode':1,'data': prev} if prev else {'op':'delete','mode':1,'data': {'nickname': name,'name':name}}
-            _record_action(1,2,data,inverse)
-            return jsonify({'ok': True, 'profile': merged})
+            prev = session.get('profile', {})
+            if not prev:
+                return jsonify({'error': 'no profile in session; use type=1 (add) first'}), 400
+            # 指定フィールドのみ更新
+            updated = prev.copy()
+            updated.update(data)
+            session['profile'] = updated
+            inverse = {'op': 'update', 'mode': 1, 'data': prev}
+            _record_action(1, 2, data, inverse)
+            return jsonify({'ok': True, 'profile': updated})
 
-        # DELETE
+        # DELETE - セッション内プロファイルをクリア
         if typ == 3:
-            # data is name or object with name
-            name = data if isinstance(data, str) else (data.get('name') or data.get('nickname'))
-            if not name:
-                return jsonify({'error': 'profile name required for delete'}), 400
-            prev = load_profile(name)
-            path = _profile_path(name)
-            if os.path.exists(path):
-                os.remove(path)
-            inverse = {'op':'add','mode':1,'data': prev} if prev else None
-            _record_action(1,3,{'name':name},inverse)
+            prev = session.get('profile', {})
+            session.pop('profile', None)
+            inverse = {'op': 'add', 'mode': 1, 'data': prev} if prev else None
+            _record_action(1, 3, None, inverse)
             return jsonify({'ok': True})
 
         return jsonify({'error': 'unsupported profile operation'}), 400
