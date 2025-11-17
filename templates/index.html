@@ -16,6 +16,34 @@
     </div>
 
     <hr />
+    <h2>朝のスケジュール生成</h2>
+    <form id="morningScheduleForm">
+      <div class="form-group">
+        <label for="wakeUpTime">起床時刻：</label>
+        <input type="time" id="wakeUpTime" required />
+      </div>
+      <div class="form-group">
+        <label for="departureTime">出発時刻：</label>
+        <input type="time" id="departureTime" required />
+      </div>
+      
+      <div class="form-group">
+        <h3>タスク一覧</h3>
+        <div id="taskList">
+          <!-- タスクはJSで動的に追加 -->
+        </div>
+        <button type="button" id="addTask">+ タスクを追加</button>
+      </div>
+      
+      <button type="submit">スケジュール生成</button>
+    </form>
+
+    <div id="scheduleResult" style="display: none">
+      <h3>生成されたスケジュール</h3>
+      <div id="scheduleOutput"></div>
+    </div>
+
+    <hr>
     <h2>スケジュール作成（簡易フォーム）</h2>
     <form id="scheduleForm">
       <input id="sch_title" placeholder="タイトル" />

@@ -1,0 +1,9 @@
+﻿{
+  "wakeUpTime":"07:00",
+  "departureTime":"09:00",
+  "tasks":[
+    {"title":"朝ごはん","duration":"20","priority":"1"},
+    {"title":"シャワー","duration":"10","priority":"2"},
+    {"title":"通勤準備","duration":"15","priority":"1"}
+  ]
+}

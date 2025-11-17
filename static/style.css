@@ -8,3 +8,15 @@ body{font-family:Meiryo, sans-serif;background:#f5f7fb;color:#222}
 .controls input{flex:1;padding:8px}
 .controls button{padding:8px 12px}
 form input{display:inline-block;margin:6px 6px 6px 0;padding:6px}
+.form-group{margin-bottom:15px}
+.form-group label{display:inline-block;width:100px}
+#taskList{margin:10px 0;padding:10px;border:1px solid #eee;border-radius:6px}
+.task-item{display:flex;gap:10px;margin-bottom:10px;align-items:center}
+.task-item input[type="text"]{flex:1}
+.task-item input[type="number"]{width:80px}
+.task-item button{padding:4px 8px;background:#fee2e2;border:none;border-radius:4px;cursor:pointer}
+#scheduleResult{margin-top:20px;padding:15px;background:#f8fafc;border-radius:6px}
+.schedule-item{padding:8px;margin:4px 0;background:white;border-left:3px solid #3b82f6;display:flex;gap:10px}
+.schedule-item .time{font-weight:bold;width:120px}
+.schedule-item .title{flex:1}
+.schedule-item .reason{color:#666;font-size:0.9em}
