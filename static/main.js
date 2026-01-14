@@ -5,7 +5,9 @@ const sendBtn = document.getElementById('send');
 function addMessage(author, text){
   const el = document.createElement('div');
   el.className = 'message ' + (author === 'user' ? 'user' : 'bot');
-  el.textContent = (author === 'user' ? 'あなた: ' : '秘書: ') + text;
+  // 改行を<br>に変換して表示
+  const prefix = (author === 'user' ? 'あなた: ' : '秘書: ');
+  el.innerHTML = prefix + text.replace(/\n/g, '<br>');
   chatEl.appendChild(el);
   chatEl.scrollTop = chatEl.scrollHeight;
 }

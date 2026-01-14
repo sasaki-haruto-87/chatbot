@@ -779,7 +779,147 @@ def chat():
             'schedule': s.to_dict()
         })
 
-    # 予定一覧
+    # 予定完了コマンド: "予定完了 <ID>" または "次の予定完了"
+    if message.strip() == '次の予定完了':
+        try:
+            sch = Schedule.query.filter(Schedule.status == 'active').order_by(Schedule.datetime).first()
+        except Exception as e:
+            print(f"DB error when fetching next schedule: {e}")
+            sch = None
+        if not sch:
+            return jsonify({'reply': '完了させる予定がありません。'})
+        sch.status = 'completed'
+        db.session.commit()
+        return jsonify({'reply': f'「{sch.title}」を完了させました ✅'})
+
+    # 特定の予定を完了: "予定完了 <ID>"
+    m_complete = re.match(r'予定完了\s+(.+)', message)
+    if m_complete:
+        schedule_id = m_complete.group(1).strip()
+        try:
+            sch = Schedule.query.get(schedule_id)
+        except Exception as e:
+            print(f"DB error: {e}")
+            sch = None
+        if not sch:
+            return jsonify({'reply': f'スケジュール ID「{schedule_id}」が見つかりません。'})
+        if sch.status == 'completed':
+            return jsonify({'reply': f'「{sch.title}」はすでに完了しています。'})
+        sch.status = 'completed'
+        db.session.commit()
+        return jsonify({'reply': f'「{sch.title}」を完了させました ✅'})
+
+    # 予定削除コマンド: "予定削除 <ID>" または "次の予定削除"
+    if message.strip() == '次の予定削除':
+        try:
+            sch = Schedule.query.filter(Schedule.status == 'active').order_by(Schedule.datetime).first()
+        except Exception as e:
+            print(f"DB error when fetching next schedule: {e}")
+            sch = None
+        if not sch:
+            return jsonify({'reply': '削除する予定がありません。'})
+        title = sch.title
+        db.session.delete(sch)
+        db.session.commit()
+        return jsonify({'reply': f'「{title}」を削除しました 🗑️'})
+
+    # 特定の予定を削除: "予定削除 <ID>"
+    m_delete = re.match(r'予定削除\s+(.+)', message)
+    if m_delete:
+        schedule_id = m_delete.group(1).strip()
+        try:
+            sch = Schedule.query.get(schedule_id)
+        except Exception as e:
+            print(f"DB error: {e}")
+            sch = None
+        if not sch:
+            return jsonify({'reply': f'スケジュール ID「{schedule_id}」が見つかりません。'})
+        title = sch.title
+        db.session.delete(sch)
+        db.session.commit()
+        return jsonify({'reply': f'「{title}」を削除しました 🗑️'})
+
+    # 次の予定（直近の未完了予定）
+    if '次の予定' in message or message.strip() == '次の予定':
+        try:
+            sch = Schedule.query.filter(Schedule.status == 'active').order_by(Schedule.datetime).first()
+        except Exception as e:
+            print(f"DB error when fetching next schedule: {e}")
+            sch = None
+        if not sch:
+            return jsonify({'reply': '直近の予定はありません。'})
+        items = json.loads(sch.items_json) if sch.items_json else []
+        when = sch.datetime
+        reply = f'次の予定: {sch.title} — {when}'
+        if sch.location:
+            reply += f' @ {sch.location}'
+        if items:
+            reply += '\n持ち物: ' + ', '.join(items)
+        return jsonify({'reply': reply, 'schedule': sch.to_dict()})
+
+    # 外出時コマンド: 本日の現在時刻以降の予定の持ち物をまとめて表示
+    if message.strip() == '外出時' or '外出' in message:
+        now = datetime.now()
+        today = now.strftime('%Y-%m-%d')
+        current_time_str = now.strftime('%Y-%m-%d %H:%M')
+        
+        try:
+            # 本日の未完了予定を取得
+            schs = Schedule.query.filter(
+                Schedule.status == 'active',
+                Schedule.datetime.like(f'{today}%')
+            ).order_by(Schedule.datetime).all()
+        except Exception as e:
+            print(f"DB error when fetching today's schedules: {e}")
+            return jsonify({'reply': '予定を取得できませんでした。'})
+        
+        if not schs:
+            return jsonify({'reply': '本日の予定はありません。'})
+        
+        # 現在時刻以降の予定をフィルタ
+        future_schs = []
+        for s in schs:
+            try:
+                sch_time = datetime.fromisoformat(s.datetime)
+                if sch_time >= now:
+                    future_schs.append(s)
+            except ValueError:
+                pass
+        
+        if not future_schs:
+            return jsonify({'reply': '本日の現在時刻以降の予定はありません。'})
+        
+        # 予定と持ち物を集約
+        all_items = set()  # 重複を避けるためセットを使用
+        schedule_lines = []
+        
+        for s in future_schs:
+            try:
+                dt = datetime.fromisoformat(s.datetime)
+                time_str = dt.strftime('%H:%M')
+            except ValueError:
+                time_str = s.datetime
+            
+            schedule_lines.append(f'  {time_str} {s.title}')
+            
+            # 持ち物を集約
+            items = json.loads(s.items_json) if s.items_json else []
+            for item in items:
+                all_items.add(item)
+        
+        # レスポンス作成
+        reply = '本日の現在時刻以降の予定と持ち物:\n'
+        reply += '\n【予定】\n' + '\n'.join(schedule_lines)
+        
+        if all_items:
+            reply += '\n\n【必要な持ち物】\n'
+            reply += ', '.join(sorted(all_items))
+        else:
+            reply += '\n\n【必要な持ち物】\nなし'
+        
+        return jsonify({'reply': reply})
+
+    # 予定一覧（「予定」は最後にチェック）
     if '予定' in message:
         now = datetime.now()
         # デフォルトで未完了（active）の予定のみを表示
@@ -831,12 +971,23 @@ def chat():
             return jsonify({'reply': f'{status_msg}予定はありません。'})
 
         lines = []
+        now = datetime.now()
+        deleted_count = 0
+        
         for s in schs:
             try:
                 dt = datetime.fromisoformat(s.datetime)
                 date_str = dt.strftime('%Y/%m/%d %H:%M')
             except ValueError:
                 date_str = s.datetime
+                dt = None
+
+            # 期限切れ判定：未完了で現在時刻以前
+            if s.status == 'active' and dt and dt < now:
+                # サイレント削除
+                db.session.delete(s)
+                deleted_count += 1
+                continue
 
             status_mark = {
                 'active': '⏳',
@@ -849,7 +1000,14 @@ def chat():
                 line += f" @ {s.location}"
             if s.alarm:
                 line += f" 🔔"
+            
+            # IDを追加
+            line += f" [ID: {s.id}]"
             lines.append(line)
+        
+        # 削除した予定があればデータベースにコミット
+        if deleted_count > 0:
+            db.session.commit()
 
         # ステータスに応じたヘッダー
         header = {
@@ -922,8 +1080,33 @@ def chat():
 
         lines = []
         for m in ms:
-            lines.append(f"{m.date} — {m.meal_type} — {m.items or 'メニューなし'}" + (f" ({m.calories} kcal)" if m.calories else ''))
+            line = f"{m.date} — {m.meal_type} — {m.items or 'メニューなし'}"
+            if m.calories:
+                line += f" ({m.calories} kcal)"
+            # IDを追加
+            line += f" [ID: {m.id}]"
+            lines.append(line)
         return jsonify({'reply': '食事記録:\n' + '\n'.join(lines), 'meals': [m.to_dict() for m in ms]})
+
+    # 食事削除コマンド: "食事削除 <ID>"
+    m_meal_delete = re.match(r'食事削除\s+(.+)', message)
+    if m_meal_delete:
+        meal_id = m_meal_delete.group(1).strip()
+        try:
+            m = Meal.query.get(meal_id)
+        except Exception as e:
+            print(f"DB error: {e}")
+            m = None
+        if not m:
+            return jsonify({'reply': f'食事記録 ID「{meal_id}」が見つかりません。'}), 404
+        
+        meal_info = f'{m.date} — {m.meal_type} — {m.items or "メニューなし"}'
+        if m.calories:
+            meal_info += f' ({m.calories} kcal)'
+        
+        db.session.delete(m)
+        db.session.commit()
+        return jsonify({'reply': f'食事記録を削除しました: {meal_info} 🗑️'})
 
     # 忘れ物チェック（次の予定の持ち物を返す）
     if '忘れ物' in message:
@@ -935,12 +1118,35 @@ def chat():
             return jsonify({'reply': f'直近の予定「{sch.title}」には持ち物が登録されていません。'} )
         return jsonify({'reply': f'直近の予定「{sch.title}」の持ち物: ' + ', '.join(items), 'items': items})
 
-    # 服装提案（例: "服装 22"）
+    # 服装提案（例: "服装 22" または "服装"）
     if message.startswith('服装'):
         m = re.search(r"(-?\d+)", message)
-        if not m:
-            return jsonify({'reply': '気温を数字で指定してください（例: 服装 22）'}), 400
-        temp = int(m.group(1))
+        temp = None
+        
+        if m:
+            # 気温が指定されている場合
+            temp = int(m.group(1))
+        else:
+            # 気温が指定されていない場合、天気から取得
+            region = profile_obj.get('region') if profile_obj else None
+            if not region:
+                return jsonify({'reply': '服装提案には気温が必要です。\n例1: 服装 22\n例2: プロファイルに地域を設定して「服装」と入力'}), 400
+            
+            # 天気情報を取得
+            try:
+                weather_result = get_current_weather(region)
+                if weather_result and weather_result.get('weather'):
+                    temp = weather_result['weather'].get('temp')
+                    if temp is not None:
+                        temp = int(temp)
+            except Exception as e:
+                print(f"Error fetching weather: {e}")
+                return jsonify({'reply': f'天気情報を取得できませんでした（地域: {region}）。気温を直接指定してください（例: 服装 22）'}), 400
+            
+            if temp is None:
+                return jsonify({'reply': f'天気情報から気温を取得できませんでした（地域: {region}）。気温を直接指定してください（例: 服装 22）'}), 400
+        
+        # 気温に基づいて服装を提案
         if temp >= 30:
             rec = 'とても暑いです。薄手の服、帽子、こまめな水分補給を。'
         elif temp >= 24:
@@ -952,6 +1158,51 @@ def chat():
         else:
             rec = 'かなり寒いです。コート、マフラー、手袋など暖かくしてください。'
         return jsonify({'reply': f'気温 {temp}°C の服装提案: {rec}'})
+
+    # 天候コマンド: 現在の天候を表示
+    if message.strip() == '天候' or message.strip() == '天気は':
+        region = profile_obj.get('region') if profile_obj else None
+        if not region:
+            return jsonify({'reply': 'プロファイルに地域が設定されていません。地域を設定してください（例: 地域登録 Tokyo）'}), 400
+        
+        try:
+            weather_result = get_current_weather(region)
+            if weather_result and weather_result.get('weather'):
+                w = weather_result['weather']
+                reply = f'{region}の現在の天況:\n'
+                reply += f'天候: {w.get("description", "不明")}\n'
+                reply += f'気温: {w.get("temp", "不明")}°C\n'
+                reply += f'体感気温: {w.get("feels_like", "不明")}°C\n'
+                reply += f'湿度: {w.get("humidity", "不明")}%\n'
+                reply += f'風速: {w.get("wind_speed", "不明")} m/s'
+                return jsonify({'reply': reply})
+            else:
+                return jsonify({'reply': f'{region}の天気情報を取得できませんでした。'}), 500
+        except Exception as e:
+            print(f"Error fetching weather: {e}")
+            return jsonify({'reply': f'天気情報を取得できませんでした。'}), 500
+
+    # 気温コマンド: 現在の気温を表示
+    if message.strip() == '気温' or message.strip() == '気温は':
+        region = profile_obj.get('region') if profile_obj else None
+        if not region:
+            return jsonify({'reply': 'プロファイルに地域が設定されていません。地域を設定してください（例: 地域登録 Tokyo）'}), 400
+        
+        try:
+            weather_result = get_current_weather(region)
+            if weather_result and weather_result.get('weather'):
+                w = weather_result['weather']
+                temp = w.get('temp', '不明')
+                feels_like = w.get('feels_like', '不明')
+                reply = f'{region}の現在の気温:\n'
+                reply += f'気温: {temp}°C\n'
+                reply += f'体感気温: {feels_like}°C'
+                return jsonify({'reply': reply})
+            else:
+                return jsonify({'reply': f'{region}の天気情報を取得できませんでした。'}), 500
+        except Exception as e:
+            print(f"Error fetching weather: {e}")
+            return jsonify({'reply': f'天気情報を取得できませんでした。'}), 500
 
     # 天気問い合わせ（例: "東京の天気は"、"大阪の天気を教えて"、"今日の東京の天気は" など）
     # いくつかの自然表現パターンに対応する
